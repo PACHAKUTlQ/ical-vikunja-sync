@@ -1,11 +1,13 @@
 mod config;
 mod db;
+mod vikunja;
 
 use anyhow::Result;
 use clap::Parser;
 use config::Config;
 use db::Database;
 use std::path::PathBuf;
+use vikunja::Vikunja;
 
 #[derive(Debug, Parser)]
 #[command(name = "ical-vikunja-sync", version, about = "Synchronize iCalendar VEVENT occurrences into Vikunja tasks")]
@@ -21,7 +23,8 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let _config = Config::load(&args.config)?;
+    let config = Config::load(&args.config)?;
     let _database = Database::open(&args.database)?;
+    let _api = Vikunja::new(&config.vikunja.url, &config.vikunja.token, config.vikunja.timeout_seconds)?;
     Ok(())
 }
