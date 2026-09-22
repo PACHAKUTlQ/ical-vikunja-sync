@@ -1,0 +1,20 @@
+[vikunja]
+url = "https://tasks.example.com/api/v2"
+token = "${VIKUNJA_API_TOKEN}"
+timeout_seconds = 30
+
+[[feeds]]
+id = "course-calendar"
+source = "/var/lib/ical-vikunja/MIT.ics"
+project = "MIT courses"
+enabled = true
+window_past_months = 0
+window_future_months = 4
+retention_days = 30
+
+[[feeds]]
+id = "team-calendar"
+source = "https://calendar.example.invalid/team.ics"
+project = "Team calendar"
+enabled = true
+window_future_months = 6
