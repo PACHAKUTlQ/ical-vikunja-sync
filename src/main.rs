@@ -1,8 +1,10 @@
 mod config;
+mod db;
 
 use anyhow::Result;
 use clap::Parser;
 use config::Config;
+use db::Database;
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -20,5 +22,6 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let _config = Config::load(&args.config)?;
+    let _database = Database::open(&args.database)?;
     Ok(())
 }
