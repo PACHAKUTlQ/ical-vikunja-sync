@@ -6,6 +6,8 @@ rust-version = "1.93"
 license = "AGPL-3.0"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
 env_toml = "0.2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
