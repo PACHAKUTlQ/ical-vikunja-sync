@@ -32,8 +32,12 @@ pub struct FeedConfig {
     pub retention_days: Option<i64>,
 }
 
-fn default_timeout() -> u64 { 30 }
-fn default_future_months() -> i64 { 4 }
+fn default_timeout() -> u64 {
+    30
+}
+fn default_future_months() -> i64 {
+    4
+}
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
