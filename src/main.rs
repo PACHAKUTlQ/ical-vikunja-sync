@@ -1,13 +1,14 @@
 mod config;
 mod db;
 mod ical;
+mod sync;
 mod vikunja;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use config::Config;
 use db::Database;
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 use vikunja::Vikunja;
 
 #[derive(Debug, Parser)]
@@ -25,7 +26,25 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(&args.config)?;
-    let _database = Database::open(&args.database)?;
-    let _api = Vikunja::new(&config.vikunja.url, &config.vikunja.token, config.vikunja.timeout_seconds)?;
-    Ok(())
+    let database = Database::open(&args.database)?;
+    let api = Vikunja::new(&config.vikunja.url, &config.vikunja.token, config.vikunja.timeout_seconds)?;
+
+    let configured: HashSet<&str> = config.feeds.iter().map(|feed| feed.id.as_str()).collect();
+    for old_id in database.configured_feed_ids()? {
+        if !configured.contains(old_id.as_str()) {
+            println!("warning: feed {old_id} was removed from configuration; its Vikunja project and tasks were left untouched");
+        }
+    }
+
+    let mut failures = Vec::new();
+    for feed in &config.feeds {
+        match sync::run_feed(&database, &api, feed, &args.data_dir).await {
+            Ok(()) => println!("synchronized feed {}", feed.id),
+            Err(error) => {
+                eprintln!("error: feed {}: {error:#}", feed.id);
+                failures.push(feed.id.clone());
+            }
+        }
+    }
+    if failures.is_empty() { Ok(()) } else { anyhow::bail!("{} feed(s) failed: {}", failures.len(), failures.join(", ")) }
 }
