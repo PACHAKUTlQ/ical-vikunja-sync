@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod ical;
 mod vikunja;
 
 use anyhow::Result;
