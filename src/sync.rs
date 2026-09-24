@@ -10,7 +10,7 @@ use serde_json::json;
 use std::{
     collections::HashSet,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
 };
 use url::Url;
 

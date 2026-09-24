@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLike};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path, str::FromStr};
+use std::{fs, path::Path};
 
 #[derive(Debug, Clone)]
 pub struct Occurrence {

@@ -4,7 +4,7 @@ mod ical;
 mod sync;
 mod vikunja;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use config::Config;
 use db::Database;
