@@ -124,7 +124,14 @@ fn fingerprint(
             .unwrap_or_default()
             .as_bytes(),
     );
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for &byte in digest.iter() {
+        hex.push(HEX[(byte >> 4) as usize] as char);
+        hex.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    hex
 }
 
 pub fn metadata(event: &Occurrence) -> String {
