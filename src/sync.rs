@@ -7,11 +7,7 @@ use crate::{
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, Months, Utc};
 use serde_json::json;
-use std::{
-    collections::HashSet,
-    fs,
-    path::Path,
-};
+use std::{collections::HashSet, fs, path::Path};
 use url::Url;
 
 pub async fn run_feed(
@@ -103,10 +99,9 @@ async fn sync_occurrence(
     if existing.as_ref().is_some_and(|row| row.tombstone) {
         return Ok(());
     }
-    let payload = task_payload(project, event);
     let Some(row) = existing else {
         let task_id = api
-            .create_task(project, payload)
+            .create_task(project, creation_payload(project, event))
             .await
             .map_err(|error| anyhow!("cannot create task for feed {}: {error}", feed.id))?;
         db.save(
@@ -122,7 +117,7 @@ async fn sync_occurrence(
     };
     let Some(task_id) = row.task_id else {
         let task_id = api
-            .create_task(project, payload)
+            .create_task(project, creation_payload(project, event))
             .await
             .map_err(|error| anyhow!("cannot recreate task for feed {}: {error}", feed.id))?;
         db.save(
@@ -139,7 +134,7 @@ async fn sync_occurrence(
     match api.task(task_id).await {
         Ok(_) => {
             if row.hash != event.hash {
-                api.update_task(task_id, payload)
+                api.update_task(task_id, task_payload(project, event))
                     .await
                     .map_err(|error| anyhow!("cannot update task {task_id}: {error}"))?;
                 db.save(
@@ -167,6 +162,12 @@ async fn sync_occurrence(
     Ok(())
 }
 
+fn creation_payload(project: i64, event: &Occurrence) -> serde_json::Value {
+    let mut payload = task_payload(project, event);
+    payload["done"] = json!(false);
+    payload
+}
+
 fn task_payload(project: i64, event: &Occurrence) -> serde_json::Value {
     let start = event.start.to_rfc3339();
     let end = event.end.map(|value| value.to_rfc3339());
@@ -176,8 +177,7 @@ fn task_payload(project: i64, event: &Occurrence) -> serde_json::Value {
         "description": metadata(event),
         "start_date": start,
         "due_date": start,
-        "end_date": end,
-        "done": false
+        "end_date": end
     })
 }
 
