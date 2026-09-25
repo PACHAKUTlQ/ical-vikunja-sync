@@ -5,6 +5,8 @@ use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLik
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
+const RECURRENCE_LIMIT: u16 = 50_000;
+
 #[derive(Debug, Clone)]
 pub struct Occurrence {
     pub key: String,
@@ -48,12 +50,19 @@ pub fn parse(text: &str, lower: DateTime<Utc>, upper: DateTime<Utc>) -> Result<V
         });
 
         let starts = match event.get_recurrence() {
-            Ok(recurrence) => recurrence
-                .all(50_000)
-                .dates
-                .into_iter()
-                .map(|date| date.with_timezone(&Utc))
-                .collect::<Vec<_>>(),
+            Ok(recurrence) => {
+                let dates = recurrence.all(RECURRENCE_LIMIT).dates;
+                if dates.len() >= usize::from(RECURRENCE_LIMIT) {
+                    bail!(
+                        "VEVENT {uid} reached the {RECURRENCE_LIMIT}-occurrence expansion limit; \
+                         refusing to reconcile an incomplete feed"
+                    );
+                }
+                dates
+                    .into_iter()
+                    .map(|date| date.with_timezone(&Utc))
+                    .collect::<Vec<_>>()
+            }
             Err(error) if has_recurrence_properties => {
                 bail!("VEVENT {uid} has an invalid recurrence: {error:?}");
             }
