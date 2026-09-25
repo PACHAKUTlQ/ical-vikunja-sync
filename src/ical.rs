@@ -3,7 +3,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 use icalendar::{Calendar, CalendarDateTime, Component, DatePerhapsTime, EventLike};
 use sha2::{Digest, Sha256};
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 const RECURRENCE_LIMIT: u16 = 50_000;
 
@@ -34,9 +34,14 @@ pub fn parse(text: &str, lower: DateTime<Utc>, upper: DateTime<Utc>) -> Result<V
         .parse()
         .map_err(|error| anyhow!("iCalendar parse error: {error}"))?;
     let mut result = Vec::new();
+    let mut keys = HashSet::new();
 
     for event in calendar.events() {
-        let uid = event.get_uid().unwrap_or("(missing-uid)").to_owned();
+        let uid = event
+            .get_uid()
+            .filter(|uid| !uid.trim().is_empty())
+            .ok_or_else(|| anyhow!("VEVENT has no nonempty UID"))?
+            .to_owned();
         let start_value = event
             .get_start()
             .ok_or_else(|| anyhow!("VEVENT {uid} has no DTSTART"))?;
@@ -73,11 +78,16 @@ pub fn parse(text: &str, lower: DateTime<Utc>, upper: DateTime<Utc>) -> Result<V
             if start < lower || start > upper {
                 continue;
             }
+
+            let key = format!("{}|{}", uid, start.to_rfc3339());
+            if !keys.insert(key.clone()) {
+                bail!("duplicate occurrence key {key:?} in iCalendar feed");
+            }
+
             let end = duration.map(|value| start + value);
             let summary = event.get_summary().unwrap_or("Untitled event").to_owned();
             let description = event.get_description().unwrap_or_default().to_owned();
             let location = event.get_location().unwrap_or_default().to_owned();
-            let key = format!("{}|{}", uid, start.to_rfc3339());
             let hash = fingerprint(&uid, &summary, &description, &location, start, end);
             result.push(Occurrence {
                 key,
