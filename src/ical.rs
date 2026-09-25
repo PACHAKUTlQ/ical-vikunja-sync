@@ -43,6 +43,10 @@ pub fn parse(text: &str, lower: DateTime<Utc>, upper: DateTime<Utc>) -> Result<V
         let event_end = event.get_end().map(|value| to_utc(&value)).transpose()?;
         let duration = event_end.map(|end| end - first_start);
 
+        let has_recurrence_properties = ["RRULE", "RDATE", "EXDATE"].iter().any(|name| {
+            event.properties().contains_key(*name) || event.multi_properties().contains_key(*name)
+        });
+
         let starts = match event.get_recurrence() {
             Ok(recurrence) => recurrence
                 .all(50_000)
@@ -50,6 +54,9 @@ pub fn parse(text: &str, lower: DateTime<Utc>, upper: DateTime<Utc>) -> Result<V
                 .into_iter()
                 .map(|date| date.with_timezone(&Utc))
                 .collect::<Vec<_>>(),
+            Err(error) if has_recurrence_properties => {
+                bail!("VEVENT {uid} has an invalid recurrence: {error:?}");
+            }
             Err(_) => vec![first_start],
         };
 
