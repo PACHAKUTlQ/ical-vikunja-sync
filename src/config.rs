@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 use url::Url;
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +35,7 @@ pub struct FeedConfig {
 fn default_timeout() -> u64 {
     30
 }
+
 fn default_future_months() -> i64 {
     4
 }
@@ -53,15 +54,28 @@ impl Config {
         if self.vikunja.token.trim().is_empty() {
             bail!("vikunja.token must not be empty");
         }
+
         let base = Url::parse(&self.vikunja.url)
             .with_context(|| "vikunja.url must be an absolute HTTP(S) URL")?;
         if !matches!(base.scheme(), "http" | "https") {
             bail!("vikunja.url must use HTTP or HTTPS");
         }
-        let mut ids = std::collections::HashSet::new();
+
+        let mut ids = HashSet::new();
         for feed in &self.feeds {
-            if feed.id.trim().is_empty() || feed.project.trim().is_empty() {
-                bail!("feed id and project must not be empty");
+            if feed.id.is_empty()
+                || !feed
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            {
+                bail!(
+                    "feed id {:?} must contain only ASCII letters, digits, hyphens, or underscores",
+                    feed.id
+                );
+            }
+            if feed.project.trim().is_empty() {
+                bail!("feed {} has an empty project name", feed.id);
             }
             if !ids.insert(&feed.id) {
                 bail!("duplicate feed id: {}", feed.id);
@@ -73,6 +87,7 @@ impl Config {
                 bail!("feed {} has a negative retention period", feed.id);
             }
         }
+
         Ok(())
     }
 }
