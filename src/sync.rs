@@ -20,12 +20,16 @@ pub async fn run_feed(
         println!("feed {} is disabled", feed.id);
         return Ok(());
     }
+
     let now = Utc::now();
-    let lower = shift_months(now, -feed.window_past_months);
-    let upper = shift_months(now, feed.window_future_months);
+    let lower = shift_months(now, -feed.window_past_months)
+        .with_context(|| format!("invalid past window for feed {}", feed.id))?;
+    let upper = shift_months(now, feed.window_future_months)
+        .with_context(|| format!("invalid future window for feed {}", feed.id))?;
     let text = obtain(&feed.id, &feed.source, data_dir).await?;
     let occurrences = crate::ical::parse(&text, lower, upper)
         .with_context(|| format!("cannot parse feed {}", feed.id))?;
+
     db.ensure_feed(&feed.id)?;
     let project = ensure_project(db, api, feed).await?;
     let desired: HashSet<String> = occurrences.iter().map(|event| event.key.clone()).collect();
@@ -33,6 +37,7 @@ pub async fn run_feed(
     for event in &occurrences {
         sync_occurrence(db, api, feed, project, event).await?;
     }
+
     for row in db.rows(&feed.id)? {
         if row.start >= lower && row.start <= upper && !desired.contains(&row.key) && !row.tombstone
         {
@@ -55,6 +60,7 @@ pub async fn run_feed(
             }
         }
     }
+
     apply_retention(db, api, feed, now).await
 }
 
@@ -66,6 +72,7 @@ async fn ensure_project(db: &Database, api: &Vikunja, feed: &FeedConfig) -> Resu
             feed.id
         ));
     }
+
     if let Some(project_id) = project_id {
         match api.project(project_id).await {
             Ok(_) => return Ok(project_id),
@@ -79,6 +86,7 @@ async fn ensure_project(db: &Database, api: &Vikunja, feed: &FeedConfig) -> Resu
             Err(error) => return Err(anyhow!("cannot read project {project_id}: {error}")),
         }
     }
+
     let project_id = api
         .create_project(&feed.project)
         .await
@@ -99,6 +107,7 @@ async fn sync_occurrence(
     if existing.as_ref().is_some_and(|row| row.tombstone) {
         return Ok(());
     }
+
     let Some(row) = existing else {
         let task_id = api
             .create_task(project, creation_payload(project, event))
@@ -115,6 +124,7 @@ async fn sync_occurrence(
         )?;
         return Ok(());
     };
+
     let Some(task_id) = row.task_id else {
         let task_id = api
             .create_task(project, creation_payload(project, event))
@@ -131,6 +141,7 @@ async fn sync_occurrence(
         )?;
         return Ok(());
     };
+
     match api.task(task_id).await {
         Ok(_) => {
             if row.hash != event.hash {
@@ -159,6 +170,7 @@ async fn sync_occurrence(
         )?,
         Err(error) => return Err(anyhow!("cannot inspect task {task_id}: {error}")),
     }
+
     Ok(())
 }
 
@@ -171,6 +183,7 @@ fn creation_payload(project: i64, event: &Occurrence) -> serde_json::Value {
 fn task_payload(project: i64, event: &Occurrence) -> serde_json::Value {
     let start = event.start.to_rfc3339();
     let end = event.end.map(|value| value.to_rfc3339());
+
     json!({
         "project_id": project,
         "title": event.title,
@@ -190,6 +203,7 @@ async fn apply_retention(
     let Some(days) = feed.retention_days else {
         return Ok(());
     };
+
     let cutoff = now - Duration::days(days);
     for row in db.rows(&feed.id)? {
         if row.end.or(Some(row.start)).is_some_and(|end| end < cutoff) && !row.tombstone {
@@ -212,6 +226,7 @@ async fn apply_retention(
             )?;
         }
     }
+
     Ok(())
 }
 
@@ -231,6 +246,7 @@ async fn obtain(feed_id: &str, source: &str, data_dir: &Path) -> Result<String> 
             if text.trim().is_empty() {
                 return Err(anyhow!("remote feed {feed_id} is empty"));
             }
+
             let cache = data_dir.join("cache").join(format!("{feed_id}.ics"));
             if let Some(parent) = cache.parent() {
                 fs::create_dir_all(parent)?;
@@ -239,17 +255,18 @@ async fn obtain(feed_id: &str, source: &str, data_dir: &Path) -> Result<String> 
             return Ok(text);
         }
     }
+
     Ok(crate::ical::read_local(Path::new(source))?)
 }
 
-fn shift_months(value: DateTime<Utc>, months: i64) -> DateTime<Utc> {
-    if months >= 0 {
-        value
-            .checked_add_months(Months::new(months as u32))
-            .unwrap_or(value)
+fn shift_months(value: DateTime<Utc>, months: i64) -> Result<DateTime<Utc>> {
+    let magnitude = u32::try_from(months.unsigned_abs())
+        .with_context(|| format!("month offset {months} is too large"))?;
+    let shifted = if months >= 0 {
+        value.checked_add_months(Months::new(magnitude))
     } else {
-        value
-            .checked_sub_months(Months::new((-months) as u32))
-            .unwrap_or(value)
-    }
+        value.checked_sub_months(Months::new(magnitude))
+    };
+
+    shifted.ok_or_else(|| anyhow!("cannot shift {value} by {months} months"))
 }
