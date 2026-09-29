@@ -14,6 +14,7 @@ impl std::fmt::Display for ApiError {
         write!(output, "Vikunja returned {}: {}", self.status, self.body)
     }
 }
+
 impl std::error::Error for ApiError {}
 
 #[derive(Clone)]
@@ -29,6 +30,7 @@ impl Vikunja {
             .timeout(Duration::from_secs(timeout))
             .user_agent("ical-vikunja-sync/0.1")
             .build()?;
+
         Ok(Self {
             client,
             base_url: base_url.trim_end_matches('/').to_owned(),
@@ -45,24 +47,31 @@ impl Vikunja {
     ) -> Result<Value, ApiError> {
         let url = format!("{}{}", self.base_url, path);
         let mut request = self.client.request(method, url).bearer_auth(&self.token);
+
         if let Some(body) = body {
             request = request.json(&body);
         }
+
         if markdown {
             request = request.header("X-Vikunja-Format", "markdown");
         }
+
         let response = request.send().await.map_err(|error| ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             body: error.to_string(),
         })?;
+
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+
         if !status.is_success() {
             return Err(ApiError { status, body });
         }
+
         if body.trim().is_empty() {
             return Ok(Value::Null);
         }
+
         serde_json::from_str(&body).map_err(|error| ApiError {
             status,
             body: format!("invalid JSON response: {error}"),
@@ -86,12 +95,12 @@ impl Vikunja {
                 "/projects?format=markdown",
                 Some(json!({
                     "title": title,
-                    "identifier": "ICAL",
                     "description": "Tasks imported from an iCalendar feed."
                 })),
                 true,
             )
             .await?;
+
         value
             .get("id")
             .and_then(Value::as_i64)
@@ -120,6 +129,7 @@ impl Vikunja {
                 true,
             )
             .await?;
+
         value
             .get("id")
             .and_then(Value::as_i64)
