@@ -2,6 +2,7 @@ use crate::{
     config::FeedConfig,
     db::Database,
     ical::{Occurrence, metadata},
+    labels::LabelPolicy,
     vikunja::{Vikunja, is_not_found},
 };
 use anyhow::{Context, Result, anyhow};
@@ -32,32 +33,33 @@ pub async fn run_feed(
 
     db.ensure_feed(&feed.id)?;
     let project = ensure_project(db, api, feed).await?;
-    let desired: HashSet<String> = occurrences.iter().map(|event| event.key.clone()).collect();
+    let labels = LabelPolicy::resolve(api, feed)
+        .await
+        .with_context(|| format!("cannot resolve labels for feed {}", feed.id))?;
+    let desired: HashSet<&str> = occurrences.iter().map(|event| event.key.as_str()).collect();
 
     for event in &occurrences {
-        sync_occurrence(db, api, feed, project, event).await?;
+        sync_occurrence(db, api, feed, project, event, &labels).await?;
     }
 
     for row in db.rows(&feed.id)? {
-        if row.start >= lower && row.start <= upper && !desired.contains(&row.key) && !row.tombstone
+        if row.start >= lower
+            && row.start <= upper
+            && !desired.contains(row.key.as_str())
+            && !row.tombstone
         {
             if let Some(task_id) = row.task_id {
                 match api.delete_task(task_id).await {
-                    Ok(()) => db.save(
-                        &feed.id, &row.key, None, true, row.start, row.end, &row.hash,
-                    )?,
-                    Err(error) if is_not_found(&error) => db.save(
-                        &feed.id, &row.key, None, true, row.start, row.end, &row.hash,
-                    )?,
+                    Ok(()) => {}
+                    Err(error) if is_not_found(&error) => {}
                     Err(error) => {
                         return Err(anyhow!("cannot remove obsolete task {task_id}: {error}"));
                     }
                 }
-            } else {
-                db.save(
-                    &feed.id, &row.key, None, true, row.start, row.end, &row.hash,
-                )?;
             }
+            db.save(
+                &feed.id, &row.key, None, true, row.start, row.end, &row.hash,
+            )?;
         }
     }
 
@@ -102,52 +104,39 @@ async fn sync_occurrence(
     feed: &FeedConfig,
     project: i64,
     event: &Occurrence,
+    labels: &LabelPolicy<'_>,
 ) -> Result<()> {
     let existing = db.get(&feed.id, &event.key)?;
     if existing.as_ref().is_some_and(|row| row.tombstone) {
         return Ok(());
     }
 
-    let Some(row) = existing else {
-        let task_id = api
-            .create_task(project, creation_payload(project, event))
-            .await
-            .map_err(|error| anyhow!("cannot create task for feed {}: {error}", feed.id))?;
-        db.save(
-            &feed.id,
-            &event.key,
-            Some(task_id),
-            false,
-            event.start,
-            event.end,
-            &event.hash,
-        )?;
-        return Ok(());
-    };
+    let task_id = match existing.and_then(|row| row.task_id.map(|task_id| (row, task_id))) {
+        None => create_occurrence(db, api, feed, project, event).await?,
+        Some((row, task_id)) => {
+            match api.task(task_id).await {
+                Ok(_) => {}
+                Err(error) if is_not_found(&error) => {
+                    tombstone_occurrence(db, feed, event)?;
+                    return Ok(());
+                }
+                Err(error) => {
+                    return Err(anyhow!("cannot inspect task {task_id}: {error}"));
+                }
+            }
 
-    let Some(task_id) = row.task_id else {
-        let task_id = api
-            .create_task(project, creation_payload(project, event))
-            .await
-            .map_err(|error| anyhow!("cannot recreate task for feed {}: {error}", feed.id))?;
-        db.save(
-            &feed.id,
-            &event.key,
-            Some(task_id),
-            false,
-            event.start,
-            event.end,
-            &event.hash,
-        )?;
-        return Ok(());
-    };
-
-    match api.task(task_id).await {
-        Ok(_) => {
             if row.hash != event.hash {
-                api.update_task(task_id, task_payload(project, event))
-                    .await
-                    .map_err(|error| anyhow!("cannot update task {task_id}: {error}"))?;
+                match api.update_task(task_id, task_payload(project, event)).await {
+                    Ok(()) => {}
+                    Err(error) if is_not_found(&error) => {
+                        tombstone_occurrence(db, feed, event)?;
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        return Err(anyhow!("cannot update task {task_id}: {error}"));
+                    }
+                }
+
                 db.save(
                     &feed.id,
                     &event.key,
@@ -158,20 +147,52 @@ async fn sync_occurrence(
                     &event.hash,
                 )?;
             }
-        }
-        Err(error) if is_not_found(&error) => db.save(
-            &feed.id,
-            &event.key,
-            None,
-            true,
-            event.start,
-            event.end,
-            &event.hash,
-        )?,
-        Err(error) => return Err(anyhow!("cannot inspect task {task_id}: {error}")),
-    }
 
-    Ok(())
+            task_id
+        }
+    };
+
+    labels
+        .reconcile(api, task_id, event)
+        .await
+        .with_context(|| format!("cannot reconcile labels for occurrence {:?}", event.key))
+}
+
+async fn create_occurrence(
+    db: &Database,
+    api: &Vikunja,
+    feed: &FeedConfig,
+    project: i64,
+    event: &Occurrence,
+) -> Result<i64> {
+    let task_id = api
+        .create_task(project, creation_payload(project, event))
+        .await
+        .map_err(|error| anyhow!("cannot create task for feed {}: {error}", feed.id))?;
+
+    db.save(
+        &feed.id,
+        &event.key,
+        Some(task_id),
+        false,
+        event.start,
+        event.end,
+        &event.hash,
+    )?;
+
+    Ok(task_id)
+}
+
+fn tombstone_occurrence(db: &Database, feed: &FeedConfig, event: &Occurrence) -> Result<()> {
+    db.save(
+        &feed.id,
+        &event.key,
+        None,
+        true,
+        event.start,
+        event.end,
+        &event.hash,
+    )
 }
 
 fn creation_payload(project: i64, event: &Occurrence) -> serde_json::Value {
@@ -204,16 +225,18 @@ async fn apply_retention(
         return Ok(());
     };
 
-    let cutoff = now - Duration::days(days);
+    let duration = Duration::try_days(days)
+        .ok_or_else(|| anyhow!("retention period for feed {} is too large", feed.id))?;
+    let cutoff = now
+        .checked_sub_signed(duration)
+        .ok_or_else(|| anyhow!("retention cutoff for feed {} is out of range", feed.id))?;
+
     for row in db.rows(&feed.id)? {
-        if row.end.or(Some(row.start)).is_some_and(|end| end < cutoff) && !row.tombstone {
+        if row.end.unwrap_or(row.start) < cutoff && !row.tombstone {
             if let Some(task_id) = row.task_id {
                 match api.delete_task(task_id).await {
-                    Ok(())
-                    | Err(crate::vikunja::ApiError {
-                        status: reqwest::StatusCode::NOT_FOUND,
-                        ..
-                    }) => {}
+                    Ok(()) => {}
+                    Err(error) if is_not_found(&error) => {}
                     Err(error) => {
                         return Err(anyhow!(
                             "retention deletion of task {task_id} failed: {error}"
@@ -233,7 +256,7 @@ async fn apply_retention(
 async fn obtain(feed_id: &str, source: &str, data_dir: &Path) -> Result<String> {
     if let Ok(url) = Url::parse(source) {
         if matches!(url.scheme(), "http" | "https") {
-            let response = reqwest::get(url.clone())
+            let response = reqwest::get(url)
                 .await
                 .with_context(|| format!("remote fetch failed for feed {feed_id}"))?;
             let response = response
@@ -256,7 +279,7 @@ async fn obtain(feed_id: &str, source: &str, data_dir: &Path) -> Result<String> 
         }
     }
 
-    Ok(crate::ical::read_local(Path::new(source))?)
+    crate::ical::read_local(Path::new(source))
 }
 
 fn shift_months(value: DateTime<Utc>, months: i64) -> Result<DateTime<Utc>> {
