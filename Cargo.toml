@@ -12,6 +12,7 @@ chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 env_toml = "0.2"
 icalendar = { version = "0.17", features = ["parser", "recurrence", "chrono-tz"] }
+regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
