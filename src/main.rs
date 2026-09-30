@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod ical;
+mod labels;
 mod sync;
 mod vikunja;
 
