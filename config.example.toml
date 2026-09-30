@@ -12,9 +12,59 @@ window_past_months = 0
 window_future_months = 4
 retention_days = 30
 
+[[feeds.label_rules]]
+label = "CS 401"
+# Match "CS 401", "CS401", "Distributed Systems"
+pattern = '(?i)\bCS\s*401\b|\bDistributed Systems\b'
+# Defaults:
+# fields = ["summary", "description", "location"]
+# mode = "or"
+
+[[feeds.label_rules]]
+label = "DS 402"
+pattern = '(?i)\bDS\s*402(?:|0)\b'
+fields = ["summary", "description", "location"]
+mode = "or"
+
+[[feeds.label_rules]]
+label = "Lecture"
+pattern = '(?i)\bLEC\b|\blecture\b'
+fields = ["summary"]
+mode = "or"
+
+[[feeds.label_rules]]
+label = "Tutorial"
+pattern = '(?i)\bTUT\b|\bRC\b|\btutorial\b|\brecitation\b'
+fields = ["summary", "description"]
+mode = "or"
+
+[[feeds.label_rules]]
+label = "Laboratory"
+pattern = '(?i)\bLAB\b|\blaboratory\b'
+fields = ["summary", "description"]
+mode = "or"
+
+[[feeds.label_rules]]
+label = "Project"
+pattern = '(?i)\bPRJ\b|\bproject\b'
+fields = ["summary", "description"]
+mode = "or"
+
+[[feeds.label_rules]]
+label = "CS 401 strict"
+pattern = '(?i)\bCS\s*401\b|\bDistributed Systems\b'
+fields = ["summary", "location"]
+mode = "and"
+
 [[feeds]]
 id = "team-calendar"
-source = "https://calendar.example.invalid/team.ics"
+source = "https://calendar.example.com/team.ics"
 project = "Team calendar"
 enabled = true
 window_future_months = 6
+
+[[feeds.label_rules]]
+label = "Meeting"
+pattern = '(?i)\bmeeting\b'
+fields = ["summary", "description"]
+mode = "or"

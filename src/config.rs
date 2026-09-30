@@ -1,16 +1,21 @@
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use regex::{Regex, RegexBuilder};
+use serde::{Deserialize, Deserializer, de::Error as _};
 use std::{collections::HashSet, fs, path::Path};
 use url::Url;
 
-#[derive(Debug, Deserialize)]
+const MAX_PATTERN_BYTES: usize = 16 * 1024;
+const REGEX_SIZE_LIMIT: usize = 1024 * 1024;
+const REGEX_DFA_SIZE_LIMIT: usize = 1024 * 1024;
+
+#[derive(Deserialize)]
 pub struct Config {
     pub vikunja: VikunjaConfig,
     #[serde(default)]
     pub feeds: Vec<FeedConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct VikunjaConfig {
     pub url: String,
     pub token: String,
@@ -30,6 +35,36 @@ pub struct FeedConfig {
     #[serde(default = "default_future_months")]
     pub window_future_months: i64,
     pub retention_days: Option<i64>,
+    #[serde(default)]
+    pub label_rules: Vec<LabelRule>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct LabelRule {
+    pub label: String,
+    #[serde(deserialize_with = "deserialize_pattern")]
+    pub pattern: Regex,
+    #[serde(default = "default_match_fields")]
+    pub fields: Vec<MatchField>,
+    #[serde(default)]
+    pub mode: MatchMode,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchField {
+    Summary,
+    Description,
+    Location,
+}
+
+#[derive(Debug, Default, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchMode {
+    #[default]
+    Or,
+    And,
 }
 
 fn default_timeout() -> u64 {
@@ -38,6 +73,32 @@ fn default_timeout() -> u64 {
 
 fn default_future_months() -> i64 {
     4
+}
+
+fn default_match_fields() -> Vec<MatchField> {
+    vec![
+        MatchField::Summary,
+        MatchField::Description,
+        MatchField::Location,
+    ]
+}
+
+fn deserialize_pattern<'de, D>(deserializer: D) -> Result<Regex, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let pattern = String::deserialize(deserializer)?;
+    if pattern.len() > MAX_PATTERN_BYTES {
+        return Err(D::Error::custom(format!(
+            "label pattern exceeds {MAX_PATTERN_BYTES} bytes"
+        )));
+    }
+
+    RegexBuilder::new(&pattern)
+        .size_limit(REGEX_SIZE_LIMIT)
+        .dfa_size_limit(REGEX_DFA_SIZE_LIMIT)
+        .build()
+        .map_err(D::Error::custom)
 }
 
 impl Config {
@@ -54,11 +115,20 @@ impl Config {
         if self.vikunja.token.trim().is_empty() {
             bail!("vikunja.token must not be empty");
         }
+        if self.vikunja.timeout_seconds == 0 {
+            bail!("vikunja.timeout_seconds must be positive");
+        }
 
         let base = Url::parse(&self.vikunja.url)
             .with_context(|| "vikunja.url must be an absolute HTTP(S) URL")?;
-        if !matches!(base.scheme(), "http" | "https") {
-            bail!("vikunja.url must use HTTP or HTTPS");
+        if !matches!(base.scheme(), "http" | "https") || base.host_str().is_none() {
+            bail!("vikunja.url must be an absolute HTTP(S) URL");
+        }
+        if !base.username().is_empty() || base.password().is_some() {
+            bail!("vikunja.url must not contain credentials");
+        }
+        if base.query().is_some() || base.fragment().is_some() {
+            bail!("vikunja.url must not contain a query or fragment");
         }
 
         let mut ids = HashSet::new();
@@ -86,6 +156,39 @@ impl Config {
             if feed.retention_days.is_some_and(|days| days < 0) {
                 bail!("feed {} has a negative retention period", feed.id);
             }
+
+            for (index, rule) in feed.label_rules.iter().enumerate() {
+                rule.validate().with_context(|| {
+                    format!("invalid label rule {} for feed {}", index + 1, feed.id)
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl LabelRule {
+    fn validate(&self) -> Result<()> {
+        if self.label.trim().is_empty() {
+            bail!("label must not be empty");
+        }
+        if self.label != self.label.trim() {
+            bail!("label must not have leading or trailing whitespace");
+        }
+        if self.label.chars().count() > 250 {
+            bail!("label must contain at most 250 characters");
+        }
+        if self.label.chars().any(char::is_control) {
+            bail!("label must not contain control characters");
+        }
+        if self.fields.is_empty() {
+            bail!("fields must contain at least one field");
+        }
+
+        let mut fields = HashSet::new();
+        if self.fields.iter().any(|field| !fields.insert(*field)) {
+            bail!("fields must not contain duplicates");
         }
 
         Ok(())
